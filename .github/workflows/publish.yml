@@ -13,7 +13,6 @@ jobs:
       matrix:
         name: [
           bionic,
-          xenial,
           focal,
           ubuntu-latest
         ]
@@ -23,10 +22,6 @@ jobs:
             os: ubuntu-18.04
             artifact_name: target/release/sawtooth-prune-db
             asset_name: sawtooth-prune-db-ubuntu-bionic
-          - name: xenial
-            os: ubuntu-16.04
-            artifact_name: target/release/sawtooth-prune-db
-            asset_name: sawtooth-prune-db-ubuntu-xenial
           - name: focal
             os: ubuntu-20.04
             artifact_name: target/release/sawtooth-prune-db
