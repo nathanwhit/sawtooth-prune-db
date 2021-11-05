@@ -12,36 +12,33 @@ jobs:
     strategy:
       matrix:
         name: [
-          bionic,
-          focal,
-          ubuntu-latest
+          linux
         ]
 
         include:
-          - name: bionic
-            os: ubuntu-18.04
-            artifact_name: target/release/sawtooth-prune-db
-            asset_name: sawtooth-prune-db-ubuntu-bionic
-          - name: focal
-            os: ubuntu-20.04
-            artifact_name: target/release/sawtooth-prune-db
-            asset_name: sawtooth-prune-db-ubuntu-focal
-          - name: ubuntu-latest
+          - name: linux
             os: ubuntu-latest
-            artifact_name: target/release/sawtooth-prune-db
-            asset_name: sawtooth-prune-db-ubuntu-latest
+            artifact_name: target/x86_64-unknown-linux-musl/release/sawtooth-prune-db
+            asset_name: sawtooth-prune-db-ubuntu-bionic
     steps:
     - uses: actions/checkout@v1
     - uses: actions-rs/toolchain@v1
       with:
         profile: minimal
         toolchain: stable
+        target: x86_64-unknown-linux-musl
     - name: Install dependencies
-      run: sudo apt-get update && sudo apt-get install -y cmake make gcc protobuf-compiler pkg-config
+      run: sudo apt-get update && sudo apt-get install -y cmake make gcc protobuf-compiler pkg-config musl-tools
     - name: Build
-      run: cargo build --release --locked
+      run: cargo build --release --target x86_64-unknown-linux-musl --locked
     - name: Upload binaries to release
       uses: actions/upload-artifact@v2
       with:
         name: ${{ matrix.asset_name }}
         path: ${{ matrix.artifact_name }}
+    - name: Release
+      uses: "marvinpinto/action-automatic-releases@latest"
+      with:
+        repo_token: "${{ secrets.GITHUB_TOKEN }}"
+        prerelease: false
+        files: ${{ matrix.artifact_name }}
