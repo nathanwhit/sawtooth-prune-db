@@ -4,6 +4,7 @@ mod merkle;
 mod proto;
 
 use clap::Parser;
+use color_eyre::eyre::Context;
 use ext::*;
 
 use color_eyre::Result;
@@ -12,6 +13,7 @@ use heed::flags::Flags;
 use prost::Message;
 use std::borrow::Cow;
 use std::error::Error as StdError;
+use std::io;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
@@ -129,10 +131,18 @@ fn main() -> Result<()> {
 
     let merkle_tree = merkle::MerkleTree::new(state_env.clone(), &state_db, state_root)?;
 
-    std::fs::OpenOptions::new()
+    if let Err(err) = fs_err::OpenOptions::new()
         .create_new(true)
         .write(true)
-        .open(&output_db_path)?;
+        .open(&output_db_path)
+    {
+        match err.kind() {
+            io::ErrorKind::AlreadyExists => Err(err).wrap_err_with(|| {
+                format!("the output database {:?} already exists", output_db_path)
+            })?,
+            _ => Err(err)?,
+        }
+    }
 
     let mut options = EnvOpenOptions::new();
     let fresh_state_env = unsafe {
