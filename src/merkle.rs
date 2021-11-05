@@ -1,4 +1,4 @@
-use color_eyre::{eyre::eyre, Report, Result};
+use color_eyre::{Report, Result};
 use core::fmt;
 use derive_more::{From, Into};
 use std::{
@@ -8,7 +8,7 @@ use std::{
     sync::{atomic::AtomicU64, Mutex},
 };
 
-use heed::{BytesDecode, BytesEncode};
+use heed::{BytesDecode, BytesEncode, RoTxn};
 use serde::{Deserialize, Serialize};
 
 use crate::ext::*;
@@ -28,6 +28,16 @@ impl fmt::Debug for Node {
             .field("children", &self.children)
             .field("value", &self.value)
             .finish()
+    }
+}
+
+impl Node {
+    pub fn from_bytes<B>(bytes: B) -> Result<Self>
+    where
+        B: AsRef<[u8]>,
+    {
+        let bytes: &serde_bytes::Bytes = serde_cbor::from_slice(bytes.as_ref())?;
+        Ok(serde_cbor::from_slice(bytes)?)
     }
 }
 
@@ -156,7 +166,8 @@ impl<'a> BytesEncode<'a> for MerkNode {
     fn bytes_encode(
         item: &'a Self::EItem,
     ) -> Result<std::borrow::Cow<'a, [u8]>, Box<dyn StdError>> {
-        Ok(serde_cbor::to_vec(item).map(Cow::Owned)?)
+        let bytes = serde_bytes::ByteBuf::from(serde_cbor::to_vec(item)?);
+        Ok(serde_cbor::to_vec(&bytes).map(Cow::Owned)?)
     }
 }
 
@@ -192,38 +203,38 @@ impl<'a> BytesDecode<'a> for HashEnc {
     }
 }
 
-pub type StateDatabase = heed::Database<HashEnc, MerkNode>;
+pub type StateDatabase = heed::Database<HashEnc, heed::types::ByteSlice>;
 
 pub struct MerkleTree<'db> {
     env: heed::Env,
     db: &'db StateDatabase,
     root_hash: Hash,
-    root_node: Node,
 }
 
 impl<'db> MerkleTree<'db> {
     pub fn new(env: heed::Env, db: &'db StateDatabase, root_hash: Hash) -> Result<Self> {
-        let root_node = {
-            let rtxn = env.read_txn().wrap_err()?;
-            db.get(&rtxn, &root_hash)
-                .wrap_err()?
-                .ok_or_else(|| eyre!("root node not found"))?
-        };
-        Ok(Self {
-            env,
-            db,
-            root_hash,
-            root_node,
-        })
+        Ok(Self { env, db, root_hash })
     }
 
+    #[allow(dead_code)]
     pub fn get(&self, hash: &Hash) -> Result<Option<Node>> {
         let rtxn = self.env.read_txn().wrap_err()?;
-        let node = self.db.get(&rtxn, hash).wrap_err()?;
+        let node = self
+            .db
+            .get(&rtxn, hash)
+            .wrap_err()?
+            .map(Node::from_bytes)
+            .transpose()?;
         rtxn.commit().wrap_err()?;
         Ok(node)
     }
 
+    pub fn get_bytes<'a>(&self, hash: &Hash, rtxn: &'a RoTxn) -> Result<Option<&'a [u8]>> {
+        let bytes = self.db.get(&rtxn, hash).wrap_err()?;
+        Ok(bytes)
+    }
+
+    #[allow(dead_code)]
     /// Visits each node in the merkle tree through a breadth-first traversal,
     /// running the `visitor` upon visiting each node
     pub fn visit(&self, mut visitor: impl FnMut(&Node)) -> Result<()> {
@@ -247,13 +258,12 @@ impl<'db> MerkleTree<'db> {
                     e
                 ),
             }
-            // let current = ?
-            // .ok_or_else(|| eyre!("node at {:?} not found", current_hash))?;
         }
 
         Ok(())
     }
 
+    #[allow(dead_code)]
     /// Visits each node in the merkle tree in parallel. This is guaranteed to visit all nodes,
     /// but the order in which nodes are visited is non-deterministic.
     pub fn par_visit(&self, visitor: impl Fn(&Node) + Send + Sync) -> Result<()> {
@@ -292,25 +302,25 @@ impl<'db> MerkleTree<'db> {
     }
 
     pub fn copy_to_db(&self, new_env: heed::Env, new_db: &StateDatabase) -> Result<()> {
-        let queue = Mutex::new(VecDeque::from([self.root_hash.clone()]));
+        let queue = parking_lot::Mutex::new(VecDeque::from([self.root_hash.clone()]));
         let running = AtomicU64::new(0);
         let mut first = true;
-        // let new_env = Mutex::new(new_env);
+        let new_env = parking_lot::Mutex::new(new_env);
 
         let written = AtomicU64::new(0);
 
         rayon::scope(|s| {
             while running.load(std::sync::atomic::Ordering::SeqCst) > 0 || first {
                 first = false;
-                while let Some(hash) = queue.lock().unwrap().pop_front() {
+                while let Some(hash) = queue.lock().pop_front() {
                     running.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     s.spawn(|_| {
                         let hash = hash;
-                        match self.get(&hash) {
+                        let rtxn = self.env.read_txn().wrap_err().unwrap();
+                        match self.get_bytes(&hash, &rtxn) {
                             Ok(Some(current)) => {
-                                // log::trace!("{} children", current.children.len());
                                 {
-                                    // let new_env = new_env.lock().unwrap();
+                                    let new_env = new_env.lock();
                                     let mut wtxn = new_env.write_txn().wrap_err().unwrap();
                                     new_db.put(&mut wtxn, &hash, &current).wrap_err().unwrap();
                                     wtxn.commit().wrap_err().unwrap();
@@ -318,16 +328,23 @@ impl<'db> MerkleTree<'db> {
                                 let count =
                                     written.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                                 if count % 1000 == 0 {
-                                    log::trace!("wrote {} entries", count);
+                                    log::trace!("{} entries written", count,);
                                 }
 
-                                for (_token, hash) in &current.children {
-                                    queue.lock().unwrap().push_back(hash.clone());
+                                let current = Node::from_bytes(current).unwrap();
+                                rtxn.commit().wrap_err().unwrap();
+                                for hash in current.children.into_values() {
+                                    let mut queue = queue.lock();
+                                    queue.push_back(hash);
                                 }
                             }
                             Ok(None) => log::error!("node with hash {:?} not found", hash),
                             Err(e) => {
-                                log::error!("error occurred while fetch node at {:?}: {}", hash, e)
+                                log::error!(
+                                    "error occurred while fetching node at {:?}: {}",
+                                    hash,
+                                    e
+                                )
                             }
                         }
                         running.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 mod error;
 mod ext;
 mod merkle;
@@ -19,7 +17,6 @@ use std::path::{Path, PathBuf};
 use heed::{BytesDecode, BytesEncode, Database, EnvOpenOptions};
 
 use crate::merkle::{Hash, StateDatabase};
-struct MerkleNode;
 
 struct Protobuf<P>(PhantomData<P>);
 
@@ -60,7 +57,6 @@ fn get_main_state_root<P: AsRef<Path>>(block_db_path: P) -> Result<Hash> {
         .unwrap();
     let block_db: Database<heed::types::Str, Protobuf<proto::Block>> =
         env.open_database(Some("main")).wrap_err()?.unwrap();
-
     let rtxn = env.read_txn().wrap_err()?;
     let state_root = {
         let (_k, v) = block_num_index.last(&rtxn).wrap_err()?.unwrap();
@@ -98,7 +94,7 @@ fn main() -> Result<()> {
 
     let new_db_path = PathBuf::from("/home/nathanw/Downloads/merkymerkle-00.lmdb");
     std::fs::OpenOptions::new()
-        .create(true)
+        .create_new(true)
         .write(true)
         .open(&new_db_path)?;
 
@@ -110,6 +106,7 @@ fn main() -> Result<()> {
             .flag(Flags::MdbMapAsync)
             .flag(Flags::MdbNoMetaSync)
             .flag(Flags::MdbWriteMap)
+            .flag(Flags::MdbNoLock)
             .map_size(1024usize.pow(4))
             .open(&new_db_path)
             .wrap_err()?
