@@ -21,12 +21,7 @@ jobs:
       - uses: Swatinem/rust-cache@v1
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y cmake make gcc protobuf-compiler pkg-config
-      - name: Check crate without default features
-        uses: actions-rs/cargo@v1
-        with:
-          command: check
-          args: --no-default-features
-      - name: Check crate with all features
+      - name: Check crate
         uses: actions-rs/cargo@v1
         with:
           command: check
