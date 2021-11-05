@@ -107,6 +107,10 @@ fn main() -> Result<()> {
     let merkle_db_path = opts.data_dir.join(opts.merkle_db);
     let output_db_path = opts.output_db;
 
+    if merkle_db_path == output_db_path {
+        color_eyre::eyre::bail!("the output DB and merkle DB cannot be the same file!");
+    }
+
     if std::env::var("RUST_LOG").is_err() {
         match opts.verbose {
             1 => std::env::set_var("RUST_LOG", "info"),
