@@ -3,6 +3,7 @@ mod ext;
 mod merkle;
 mod proto;
 
+use clap::Parser;
 use ext::*;
 
 use color_eyre::Result;
@@ -68,11 +69,47 @@ fn get_main_state_root<P: AsRef<Path>>(block_db_path: P) -> Result<Hash> {
     state_root.try_into()
 }
 
+#[derive(Parser)]
+pub struct CliOpts {
+    data_dir: PathBuf,
+
+    #[clap(
+        short,
+        parse(from_occurrences),
+        about("Set verbosity of logging output")
+    )]
+    verbose: u32,
+
+    #[clap(short, long, default_value = "merkle-00.lmdb")]
+    merkle_db: PathBuf,
+
+    #[clap(short, long, default_value = "block-00.lmdb")]
+    block_db: PathBuf,
+
+    output_db: PathBuf,
+}
+
 fn main() -> Result<()> {
     color_eyre::install()?;
+
+    let opts = CliOpts::parse();
+
+    let block_db_path = opts.data_dir.join(opts.block_db);
+    let merkle_db_path = opts.data_dir.join(opts.merkle_db);
+    let output_db_path = opts.output_db;
+
+    if std::env::var("RUST_LOG").is_err() {
+        match opts.verbose {
+            1 => std::env::set_var("RUST_LOG", "info"),
+            2 => std::env::set_var("RUST_LOG", "debug"),
+            3 => std::env::set_var("RUST_LOG", "trace"),
+            _ => {}
+        }
+    }
+
     pretty_env_logger::init();
 
-    let state_root = get_main_state_root("/home/nathanw/Downloads/_data/block-00.lmdb")?;
+    let state_root = get_main_state_root(&block_db_path)?;
 
     let mut options = EnvOpenOptions::new();
 
@@ -84,7 +121,7 @@ fn main() -> Result<()> {
             .flag(Flags::MdbNoLock)
             .flag(Flags::MdbNoSync)
             .flag(Flags::MdbNoMetaSync)
-            .open("/home/nathanw/Downloads/_data/merkle-00.lmdb")
+            .open(merkle_db_path)
             .wrap_err()?
     };
 
@@ -92,11 +129,10 @@ fn main() -> Result<()> {
 
     let merkle_tree = merkle::MerkleTree::new(state_env.clone(), &state_db, state_root)?;
 
-    let new_db_path = PathBuf::from("/home/nathanw/Downloads/merkymerkle-00.lmdb");
     std::fs::OpenOptions::new()
         .create_new(true)
         .write(true)
-        .open(&new_db_path)?;
+        .open(&output_db_path)?;
 
     let mut options = EnvOpenOptions::new();
     let fresh_state_env = unsafe {
@@ -108,7 +144,7 @@ fn main() -> Result<()> {
             .flag(Flags::MdbWriteMap)
             .flag(Flags::MdbNoLock)
             .map_size(1024usize.pow(4))
-            .open(&new_db_path)
+            .open(&output_db_path)
             .wrap_err()?
     };
 

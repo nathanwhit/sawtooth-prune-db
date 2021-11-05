@@ -280,7 +280,6 @@ impl<'db> MerkleTree<'db> {
                         let hash = hash;
                         match self.get(&hash) {
                             Ok(Some(current)) => {
-                                // log::trace!("{} children", current.children.len());
                                 visitor(&current);
 
                                 for (_token, hash) in &current.children {
@@ -327,8 +326,9 @@ impl<'db> MerkleTree<'db> {
                                 }
                                 let count =
                                     written.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                                if count % 1000 == 0 {
-                                    log::trace!("{} entries written", count,);
+
+                                if count % 100000 == 0 {
+                                    log::info!("{} state entries written", count,);
                                 }
 
                                 let current = Node::from_bytes(current).unwrap();

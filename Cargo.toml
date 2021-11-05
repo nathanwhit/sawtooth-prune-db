@@ -1,11 +1,12 @@
 [package]
-name = "db-size-profile"
+name = "sawtooth-prune-db"
 version = "0.1.0"
 edition = "2021"
 
 [features]
 
 [dependencies]
+clap = "3.0.0-beta.5"
 color-eyre = "0.5.11"
 derive_more = "0.99.16"
 heed = "0.11.0"
