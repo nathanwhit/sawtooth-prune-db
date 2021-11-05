@@ -88,6 +88,13 @@ pub struct CliOpts {
     #[clap(short, long, default_value = "block-00.lmdb")]
     block_db: PathBuf,
 
+    #[clap(
+        short,
+        long,
+        about("force overwriting output database if it already exists")
+    )]
+    force: bool,
+
     output_db: PathBuf,
 }
 
@@ -131,16 +138,27 @@ fn main() -> Result<()> {
 
     let merkle_tree = merkle::MerkleTree::new(state_env.clone(), &state_db, state_root)?;
 
-    if let Err(err) = fs_err::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&output_db_path)
-    {
-        match err.kind() {
-            io::ErrorKind::AlreadyExists => Err(err).wrap_err_with(|| {
-                format!("the output database {:?} already exists", output_db_path)
-            })?,
-            _ => Err(err)?,
+    if opts.force {
+        fs_err::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&output_db_path)?;
+    } else {
+        if let Err(err) = fs_err::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&output_db_path)
+        {
+            match err.kind() {
+                io::ErrorKind::AlreadyExists => Err(err).wrap_err_with(|| {
+                    format!(
+                        "the output database {:?} already exists. use a new path or pass '-f' to overwrite file",
+                        output_db_path
+                    )
+                })?,
+                _ => Err(err)?,
+            }
         }
     }
 
