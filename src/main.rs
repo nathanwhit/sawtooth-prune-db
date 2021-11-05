@@ -107,7 +107,7 @@ fn main() -> Result<()> {
     let merkle_db_path = opts.data_dir.join(opts.merkle_db);
     let output_db_path = opts.output_db;
 
-    if merkle_db_path == output_db_path {
+    if merkle_db_path.canonicalize()? == output_db_path.canonicalize()? {
         color_eyre::eyre::bail!("the output DB and merkle DB cannot be the same file!");
     }
 
