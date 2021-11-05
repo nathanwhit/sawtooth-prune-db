@@ -1,3 +1,5 @@
+#![allow(clippy::try_err)]
+
 mod error;
 mod ext;
 mod merkle;
@@ -63,7 +65,7 @@ fn get_main_state_root<P: AsRef<Path>>(block_db_path: P) -> Result<Hash> {
     let rtxn = env.read_txn().wrap_err()?;
     let state_root = {
         let (_k, v) = block_num_index.last(&rtxn).wrap_err()?.unwrap();
-        let block = block_db.get(&rtxn, &v).wrap_err()?.unwrap();
+        let block = block_db.get(&rtxn, v).wrap_err()?.unwrap();
         let header = proto::BlockHeader::try_parse(&block.header)?;
         header.state_root_hash
     };
@@ -107,6 +109,28 @@ fn main() -> Result<()> {
     let merkle_db_path = opts.data_dir.join(opts.merkle_db);
     let output_db_path = opts.output_db;
 
+    if opts.force {
+        fs_err::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&output_db_path)?;
+    } else if let Err(err) = fs_err::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&output_db_path)
+    {
+        match err.kind() {
+                io::ErrorKind::AlreadyExists => Err(err).wrap_err_with(|| {
+                    format!(
+                        "the output database {:?} already exists. use a new path or pass '-f' to overwrite file",
+                        output_db_path
+                    )
+                })?,
+                _ => Err(err)?,
+            }
+    }
+
     if merkle_db_path.canonicalize()? == output_db_path.canonicalize()? {
         color_eyre::eyre::bail!("the output DB and merkle DB cannot be the same file!");
     }
@@ -140,31 +164,7 @@ fn main() -> Result<()> {
 
     let state_db: StateDatabase = state_env.open_database(None).wrap_err()?.unwrap();
 
-    let merkle_tree = merkle::MerkleTree::new(state_env.clone(), &state_db, state_root)?;
-
-    if opts.force {
-        fs_err::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&output_db_path)?;
-    } else {
-        if let Err(err) = fs_err::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&output_db_path)
-        {
-            match err.kind() {
-                io::ErrorKind::AlreadyExists => Err(err).wrap_err_with(|| {
-                    format!(
-                        "the output database {:?} already exists. use a new path or pass '-f' to overwrite file",
-                        output_db_path
-                    )
-                })?,
-                _ => Err(err)?,
-            }
-        }
-    }
+    let merkle_tree = merkle::MerkleTree::new(state_env, &state_db, state_root)?;
 
     let mut options = EnvOpenOptions::new();
     let fresh_state_env = unsafe {
@@ -187,7 +187,7 @@ fn main() -> Result<()> {
         }
     };
 
-    merkle_tree.copy_to_db(fresh_state_env.clone(), &fresh_db)?;
+    merkle_tree.copy_to_db(fresh_state_env, &fresh_db)?;
 
     Ok(())
 }

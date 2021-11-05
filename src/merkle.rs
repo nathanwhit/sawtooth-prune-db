@@ -5,7 +5,7 @@ use std::{
     borrow::Cow,
     collections::{BTreeMap, VecDeque},
     error::Error as StdError,
-    sync::{atomic::AtomicU64, Mutex},
+    sync::atomic::AtomicU64,
 };
 
 use heed::{BytesDecode, BytesEncode, RoTxn};
@@ -50,7 +50,7 @@ impl TryFrom<String> for Hash {
     type Error = Report;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        if !value.as_bytes().into_iter().all(u8::is_ascii_hexdigit) {
+        if !value.as_bytes().iter().all(u8::is_ascii_hexdigit) {
             Err(color_eyre::eyre::eyre!(
                 "Invalid hash: must be hex characters"
             ))
@@ -64,13 +64,8 @@ impl TryFrom<&str> for Hash {
     type Error = Report;
 
     fn try_from(value: &str) -> Result<Self> {
-        if !value.as_bytes().into_iter().all(u8::is_ascii_hexdigit) {
-            Err(color_eyre::eyre::eyre!(
-                "Invalid hash: must be hex characters"
-            ))
-        } else {
-            Ok(Hash(value.to_owned()))
-        }
+        let value = value.to_owned();
+        Self::try_from(value)
     }
 }
 
@@ -230,7 +225,7 @@ impl<'db> MerkleTree<'db> {
     }
 
     pub fn get_bytes<'a>(&self, hash: &Hash, rtxn: &'a RoTxn) -> Result<Option<&'a [u8]>> {
-        let bytes = self.db.get(&rtxn, hash).wrap_err()?;
+        let bytes = self.db.get(rtxn, hash).wrap_err()?;
         Ok(bytes)
     }
 
@@ -247,8 +242,8 @@ impl<'db> MerkleTree<'db> {
                     // log::trace!("{} children", current.children.len());
                     visitor(&current);
 
-                    for (_token, hash) in &current.children {
-                        queue.push_back(hash.clone());
+                    for hash in current.children.into_values() {
+                        queue.push_back(hash);
                     }
                 }
                 Ok(None) => log::error!("node with hash {:?} not found", current_hash),
@@ -267,14 +262,14 @@ impl<'db> MerkleTree<'db> {
     /// Visits each node in the merkle tree in parallel. This is guaranteed to visit all nodes,
     /// but the order in which nodes are visited is non-deterministic.
     pub fn par_visit(&self, visitor: impl Fn(&Node) + Send + Sync) -> Result<()> {
-        let queue = Mutex::new(VecDeque::from([self.root_hash.clone()]));
+        let queue = parking_lot::Mutex::new(VecDeque::from([self.root_hash.clone()]));
         let running = AtomicU64::new(0);
         let mut first = true;
 
         rayon::scope(|s| {
             while running.load(std::sync::atomic::Ordering::SeqCst) > 0 || first {
                 first = false;
-                while let Some(hash) = queue.lock().unwrap().pop_front() {
+                while let Some(hash) = queue.lock().pop_front() {
                     running.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     s.spawn(|_| {
                         let hash = hash;
@@ -282,8 +277,8 @@ impl<'db> MerkleTree<'db> {
                             Ok(Some(current)) => {
                                 visitor(&current);
 
-                                for (_token, hash) in &current.children {
-                                    queue.lock().unwrap().push_back(hash.clone());
+                                for hash in current.children.into_values() {
+                                    queue.lock().push_back(hash);
                                 }
                             }
                             Ok(None) => log::error!("node with hash {:?} not found", hash),
@@ -321,7 +316,7 @@ impl<'db> MerkleTree<'db> {
                                 {
                                     let new_env = new_env.lock();
                                     let mut wtxn = new_env.write_txn().wrap_err().unwrap();
-                                    new_db.put(&mut wtxn, &hash, &current).wrap_err().unwrap();
+                                    new_db.put(&mut wtxn, &hash, current).wrap_err().unwrap();
                                     wtxn.commit().wrap_err().unwrap();
                                 }
                                 let count =
