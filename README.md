@@ -7,6 +7,13 @@ will not corrupt the original database.
 
 ## Usage
 
+### Precompiled Binaries
+
+Precompiled, statically-linked binaries are available for linux in Github Releases.
+These should be compatible with any linux distribution.
+
+### Building from source
+
 Requires an up-to-date Rust toolchain, as well as a C/C++ compiler, cmake, and pkg-config.
 
 1. Clone repository
@@ -18,7 +25,7 @@ git clone https://github.com/nathanwhit/sawtooth-prune-db.git
 cargo build --release
 ```
 
-3. Run binary
+### Running binary
 ```
-./target/Release/sawtooth-prune-db -v <Path to sawtooth data directory> <Output DB path>
+sawtooth-prune-db -v <Path to sawtooth data directory> <Output DB path>
 ```
