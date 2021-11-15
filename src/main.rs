@@ -4,6 +4,7 @@ mod error;
 mod ext;
 mod merkle;
 mod proto;
+mod stopwatch;
 
 use clap::Parser;
 use color_eyre::eyre::Context;
@@ -17,11 +18,11 @@ use std::borrow::Cow;
 use std::error::Error as StdError;
 use std::io;
 use std::marker::PhantomData;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use heed::{BytesDecode, BytesEncode, Database, EnvOpenOptions};
 
-use crate::merkle::{Hash, StateDatabase};
+use crate::merkle::{Hash, MerkleDb, StateDatabase};
 
 struct Protobuf<P>(PhantomData<P>);
 
@@ -47,33 +48,7 @@ where
     }
 }
 
-fn get_main_state_root<P: AsRef<Path>>(block_db_path: P) -> Result<Hash> {
-    let mut options = EnvOpenOptions::new();
-    let env = unsafe {
-        options
-            .max_dbs(4)
-            .flag(Flags::MdbNoSubDir)
-            .open(block_db_path)
-            .wrap_err()?
-    };
-    let block_num_index: Database<heed::types::Str, heed::types::Str> = env
-        .open_database(Some("index_block_num"))
-        .wrap_err()?
-        .unwrap();
-    let block_db: Database<heed::types::Str, Protobuf<proto::Block>> =
-        env.open_database(Some("main")).wrap_err()?.unwrap();
-    let rtxn = env.read_txn().wrap_err()?;
-    let state_root = {
-        let (_k, v) = block_num_index.last(&rtxn).wrap_err()?.unwrap();
-        let block = block_db.get(&rtxn, v).wrap_err()?.unwrap();
-        let header = proto::BlockHeader::try_parse(&block.header)?;
-        header.state_root_hash
-    };
-    rtxn.commit().wrap_err()?;
-    state_root.try_into()
-}
-
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 pub struct CliOpts {
     data_dir: PathBuf,
 
@@ -146,8 +121,6 @@ fn main() -> Result<()> {
 
     pretty_env_logger::init();
 
-    let state_root = get_main_state_root(&block_db_path)?;
-
     let mut options = EnvOpenOptions::new();
 
     let state_env = unsafe {
@@ -164,17 +137,15 @@ fn main() -> Result<()> {
 
     let state_db: StateDatabase = state_env.open_database(None).wrap_err()?.unwrap();
 
-    let merkle_tree = merkle::MerkleTree::new(state_env, &state_db, state_root)?;
-
     let mut options = EnvOpenOptions::new();
     let fresh_state_env = unsafe {
         options
             .flag(Flags::MdbNoSubDir)
             .flag(Flags::MdbNoRdAhead)
             .flag(Flags::MdbMapAsync)
-            .flag(Flags::MdbNoMetaSync)
             .flag(Flags::MdbWriteMap)
             .flag(Flags::MdbNoLock)
+            .max_dbs(3)
             .map_size(1024usize.pow(4))
             .open(&output_db_path)
             .wrap_err()?
@@ -187,7 +158,47 @@ fn main() -> Result<()> {
         }
     };
 
-    merkle_tree.copy_to_db(fresh_state_env, &fresh_db)?;
+    let mut options = EnvOpenOptions::new();
+    let block_env = unsafe {
+        options
+            .max_dbs(4)
+            .flag(Flags::MdbNoSubDir)
+            .flag(Flags::MdbRdOnly)
+            .flag(Flags::MdbNoRdAhead)
+            .flag(Flags::MdbNoLock)
+            .flag(Flags::MdbNoSync)
+            .flag(Flags::MdbNoMetaSync)
+            .open(block_db_path)
+            .wrap_err()?
+    };
+    let block_num_index: Database<heed::types::Str, merkle::HashEnc> = block_env
+        .open_database(Some("index_block_num"))
+        .wrap_err()?
+        .unwrap();
+    let block_db: Database<merkle::HashEnc, Protobuf<proto::Block>> =
+        block_env.open_database(Some("main")).wrap_err()?.unwrap();
+    let rtxn = block_env.read_txn().wrap_err()?;
+    rtxn.commit().wrap_err()?;
+
+    let mut state_hashes: indexmap::IndexSet<Hash, fxhash::FxBuildHasher> =
+        indexmap::IndexSet::default();
+    let rtxn = block_env.read_txn().wrap_err()?;
+    let pb = indicatif::ProgressBar::new(block_db.len(&rtxn).wrap_err()?);
+    log::info!("Collecting root nodes");
+    for item in pb.wrap_iter(block_num_index.iter(&rtxn).wrap_err()?) {
+        let (_block_num, hash) = item.wrap_err()?;
+        let block = block_db.get(&rtxn, &hash).wrap_err()?.unwrap();
+        let header: proto::BlockHeader = block.header.parse_into().unwrap();
+        let hash: Hash = header.state_root_hash.try_into().unwrap();
+        state_hashes.insert(hash);
+    }
+    rtxn.commit().wrap_err()?;
+
+    let merkle = MerkleDb::new(state_env, &state_db)?;
+
+    log::info!("Copying rooted trees to new database");
+
+    merkle.copy_trees_to_db(state_hashes.into_iter().rev(), fresh_state_env, &fresh_db)?;
 
     Ok(())
 }

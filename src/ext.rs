@@ -6,14 +6,19 @@ use crate::error::HeedError;
 
 pub trait ResultExt: Sized {
     type Output;
+    #[track_caller]
     fn wrap_err(self) -> Self::Output;
 }
 
 impl<T> ResultExt for Result<T, heed::Error> {
     type Output = Result<T>;
 
+    #[track_caller]
     fn wrap_err(self) -> Self::Output {
-        self.map_err(|err| color_eyre::eyre::eyre!(HeedError::new(err)))
+        self.map_err(|err| {
+            log::error!("{}", err);
+            color_eyre::eyre::eyre!(HeedError::new(err))
+        })
     }
 }
 

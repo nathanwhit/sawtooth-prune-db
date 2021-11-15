@@ -1,11 +1,17 @@
 use color_eyre::{Report, Result};
 use core::fmt;
+use dashmap::DashSet;
 use derive_more::{From, Into};
+use fxhash::FxBuildHasher;
+
 use std::{
     borrow::Cow,
     collections::{BTreeMap, VecDeque},
     error::Error as StdError,
-    sync::atomic::AtomicU64,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 use heed::{BytesDecode, BytesEncode, RoTxn};
@@ -41,7 +47,7 @@ impl Node {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 #[serde(transparent)]
 pub struct Hash(pub String);
@@ -200,15 +206,14 @@ impl<'a> BytesDecode<'a> for HashEnc {
 
 pub type StateDatabase = heed::Database<HashEnc, heed::types::ByteSlice>;
 
-pub struct MerkleTree<'db> {
+pub struct MerkleDb<'db> {
     env: heed::Env,
     db: &'db StateDatabase,
-    root_hash: Hash,
 }
 
-impl<'db> MerkleTree<'db> {
-    pub fn new(env: heed::Env, db: &'db StateDatabase, root_hash: Hash) -> Result<Self> {
-        Ok(Self { env, db, root_hash })
+impl<'db> MerkleDb<'db> {
+    pub fn new(env: heed::Env, db: &'db StateDatabase) -> Result<Self> {
+        Ok(Self { env, db })
     }
 
     #[allow(dead_code)]
@@ -232,9 +237,8 @@ impl<'db> MerkleTree<'db> {
     #[allow(dead_code)]
     /// Visits each node in the merkle tree through a breadth-first traversal,
     /// running the `visitor` upon visiting each node
-    pub fn visit(&self, mut visitor: impl FnMut(&Node)) -> Result<()> {
-        let mut queue = VecDeque::new();
-        queue.push_back(self.root_hash.clone());
+    pub fn visit(&self, root_hash: Hash, mut visitor: impl FnMut(&Node)) -> Result<()> {
+        let mut queue = VecDeque::from([root_hash]);
 
         while let Some(current_hash) = queue.pop_front() {
             match self.get(&current_hash) {
@@ -261,16 +265,16 @@ impl<'db> MerkleTree<'db> {
     #[allow(dead_code)]
     /// Visits each node in the merkle tree in parallel. This is guaranteed to visit all nodes,
     /// but the order in which nodes are visited is non-deterministic.
-    pub fn par_visit(&self, visitor: impl Fn(&Node) + Send + Sync) -> Result<()> {
-        let queue = parking_lot::Mutex::new(VecDeque::from([self.root_hash.clone()]));
+    pub fn par_visit(&self, root_hash: Hash, visitor: impl Fn(&Node) + Send + Sync) -> Result<()> {
+        let queue = parking_lot::Mutex::new(VecDeque::from([root_hash]));
         let running = AtomicU64::new(0);
         let mut first = true;
 
         rayon::scope(|s| {
-            while running.load(std::sync::atomic::Ordering::SeqCst) > 0 || first {
+            while running.load(Ordering::SeqCst) > 0 || first {
                 first = false;
                 while let Some(hash) = queue.lock().pop_front() {
-                    running.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    running.fetch_add(1, Ordering::SeqCst);
                     s.spawn(|_| {
                         let hash = hash;
                         match self.get(&hash) {
@@ -286,7 +290,7 @@ impl<'db> MerkleTree<'db> {
                                 log::error!("error occurred while fetch node at {:?}: {}", hash, e)
                             }
                         }
-                        running.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                        running.fetch_sub(1, Ordering::SeqCst);
                     });
                 }
             }
@@ -295,19 +299,29 @@ impl<'db> MerkleTree<'db> {
         Ok(())
     }
 
-    pub fn copy_to_db(&self, new_env: heed::Env, new_db: &StateDatabase) -> Result<()> {
-        let queue = parking_lot::Mutex::new(VecDeque::from([self.root_hash.clone()]));
+    #[allow(dead_code)]
+    pub fn copy_to_db(
+        &self,
+        root_hash: Hash,
+        new_env: Arc<parking_lot::Mutex<heed::Env>>,
+        new_db: &StateDatabase,
+        copied: &dashmap::DashSet<Hash, FxBuildHasher>,
+    ) -> Result<()> {
+        let queue = parking_lot::Mutex::new(VecDeque::from([root_hash]));
         let running = AtomicU64::new(0);
         let mut first = true;
-        let new_env = parking_lot::Mutex::new(new_env);
+        // let new_env = parking_lot::Mutex::new(new_env);
 
         let written = AtomicU64::new(0);
 
         rayon::scope(|s| {
-            while running.load(std::sync::atomic::Ordering::SeqCst) > 0 || first {
+            while running.load(Ordering::SeqCst) > 0 || first || !queue.lock().is_empty() {
                 first = false;
                 while let Some(hash) = queue.lock().pop_front() {
-                    running.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if copied.contains(&hash) {
+                        log::debug!("Already copied {:?}, skipping", hash);
+                    }
+                    running.fetch_add(1, Ordering::SeqCst);
                     s.spawn(|_| {
                         let hash = hash;
                         let rtxn = self.env.read_txn().wrap_err().unwrap();
@@ -316,21 +330,25 @@ impl<'db> MerkleTree<'db> {
                                 {
                                     let new_env = new_env.lock();
                                     let mut wtxn = new_env.write_txn().wrap_err().unwrap();
+                                    // log::info!("put");
                                     new_db.put(&mut wtxn, &hash, current).wrap_err().unwrap();
+                                    // log::info!("after put");
                                     wtxn.commit().wrap_err().unwrap();
                                 }
-                                let count =
-                                    written.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                copied.insert(hash);
+                                let count = written.fetch_add(1, Ordering::SeqCst);
 
-                                if count % 100000 == 0 {
+                                if count % 100000 == 0 && count > 0 {
                                     log::info!("{} state entries written", count,);
                                 }
 
                                 let current = Node::from_bytes(current).unwrap();
                                 rtxn.commit().wrap_err().unwrap();
                                 for hash in current.children.into_values() {
-                                    let mut queue = queue.lock();
-                                    queue.push_back(hash);
+                                    if !copied.contains(&hash) {
+                                        let mut queue = queue.lock();
+                                        queue.push_back(hash);
+                                    }
                                 }
                             }
                             Ok(None) => log::error!("node with hash {:?} not found", hash),
@@ -342,7 +360,7 @@ impl<'db> MerkleTree<'db> {
                                 )
                             }
                         }
-                        running.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                        running.fetch_sub(1, Ordering::SeqCst);
                     });
                 }
             }
@@ -350,6 +368,91 @@ impl<'db> MerkleTree<'db> {
 
         Ok(())
     }
+
+    pub fn copy_trees_to_db(
+        &self,
+        state_roots: impl IntoIterator<Item = Hash>,
+        new_env: heed::Env,
+        new_db: &StateDatabase,
+    ) -> Result<()> {
+        let cpus = num_cpus::get();
+        let copied: DashSet<Hash, FxBuildHasher> = DashSet::default();
+        let queue = SyncStack::new(Vec::from_iter(state_roots));
+        let running = AtomicU64::new(0);
+        let new_env = std::sync::Mutex::new(new_env);
+
+        let written = AtomicU64::new(0);
+        log::debug!("starting, queue size = {}", queue.len());
+        crossbeam::scope(|s| {
+            for _ in 0..cpus {
+                s.spawn(|_| {
+                    while running.load(Ordering::SeqCst) > 0 || !queue.is_empty() {
+                        while let Some(hash) = queue.pop() {
+                            if copied.contains(&hash) {
+                                log::trace!("Already copied {:?}, skipping", hash);
+                            }
+
+                            running.fetch_add(1, Ordering::SeqCst);
+                            let hash = hash;
+                            let rtxn = self.env.read_txn().wrap_err().unwrap();
+                            match self.get_bytes(&hash, &rtxn) {
+                                Ok(Some(current)) => {
+                                    {
+                                        // let mut timer = crate::stopwatch::StopWatch::start();
+                                        let new_env = new_env.lock().unwrap();
+                                        // timer.record("env lock");
+                                        let mut wtxn = new_env.write_txn().wrap_err().unwrap();
+                                        new_db.put(&mut wtxn, &hash, current).wrap_err().unwrap();
+                                        // timer.record("put");
+                                        wtxn.commit().wrap_err().unwrap();
+                                        // timer.record_total("write total");
+                                    }
+                                    copied.insert(hash);
+                                    let count = written.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            
+                                    if count % 100000 == 0 && count > 0 {
+                                        log::debug!(
+                                            "{} state entries written; {} items in queue; {} running",
+                                            count,
+                                            queue.len(),
+                                            running.load(Ordering::Relaxed)
+                                        );
+                                    }
+            
+                                    let current = Node::from_bytes(current).unwrap();
+                                    rtxn.commit().wrap_err().unwrap();
+                                    // let mut new = 1;
+                                    queue.extend(
+                                        current
+                                            .children
+                                            .into_values()
+                                            .into_iter()
+                                            .filter(|hash| !copied.contains(hash)),
+                                    );
+            
+                                    // bar.inc_length(new);
+                                }
+                                Ok(None) => log::error!("node with hash {:?} not found", hash),
+                                Err(e) => {
+                                    log::error!("error occurred while fetching node at {:?}: {}", hash, e)
+                                }
+                            }
+                            running.fetch_sub(1, Ordering::SeqCst);
+                        }
+                    }
+                });
+            }
+        }).unwrap();
+        // let mut count = 0;
+        // let added = AtomicU64::new(0);
+        
+        
+
+        log::warn!("Done!");
+
+        Ok(())
+    }
+
     // pub fn copy_to_db(&self, new_env: heed::Env, new_db: &StateDatabase) -> Result<()> {
     //     let mut queue = VecDeque::new();
     //     queue.push_back(self.root_hash.clone());
@@ -380,4 +483,39 @@ impl<'db> MerkleTree<'db> {
     //     }
     //     Ok(())
     // }
+}
+
+pub struct SyncStack {
+    inner: std::sync::RwLock<Vec<Hash>>,
+    empty: AtomicBool,
+}
+
+impl SyncStack {
+    pub fn new(stack: Vec<Hash>) -> Self {
+        Self {
+            empty: AtomicBool::new(stack.is_empty()),
+            inner: std::sync::RwLock::new(stack),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.read().unwrap().len()
+    }
+
+    pub fn pop(&self) -> Option<Hash> {
+        let mut inner = self.inner.write().unwrap();
+        let res = inner.pop();
+        if inner.is_empty() {
+            self.empty.store(true, Ordering::SeqCst);
+        }
+        res
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.empty.load(Ordering::SeqCst)
+    }
+
+    pub fn extend(&self, iter: impl IntoIterator<Item = Hash>) {
+        self.inner.write().unwrap().extend(iter)
+    }
 }

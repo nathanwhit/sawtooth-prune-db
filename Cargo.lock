@@ -174,10 +174,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "console"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a28b32d32ca44b70c3e4acd7db1babf555fa026e385fb95f18028f88848b3c31"
+dependencies = [
+ "encode_unicode",
+ "libc",
+ "once_cell",
+ "terminal_size",
+ "winapi",
+]
+
+[[package]]
 name = "convert_case"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6245d59a3e82a7fc217c5828a6692dbc6dfb63a0c8c90495621f7b9d79704a0e"
+
+[[package]]
+name = "crossbeam"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ae5588f6b3c3cb05239e90bd110f257254aecd01e4635400391aeae07497845"
+dependencies = [
+ "cfg-if 1.0.0",
+ "crossbeam-channel",
+ "crossbeam-deque",
+ "crossbeam-epoch",
+ "crossbeam-queue 0.3.2",
+ "crossbeam-utils 0.8.5",
+]
 
 [[package]]
 name = "crossbeam-channel"
@@ -223,6 +250,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-queue"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b10ddc024425c88c2ad148c1b0fd53f4c6d38db9697c9f1588381212fa657c9"
+dependencies = [
+ "cfg-if 1.0.0",
+ "crossbeam-utils 0.8.5",
+]
+
+[[package]]
 name = "crossbeam-utils"
 version = "0.6.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -243,6 +280,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dashmap"
+version = "4.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e77a43b28d0668df09411cb0bc9a8c2adc40f9a048afe863e05fd43251e8e39c"
+dependencies = [
+ "cfg-if 1.0.0",
+ "num_cpus",
+]
+
+[[package]]
 name = "derive_more"
 version = "0.99.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -260,6 +307,12 @@ name = "either"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e78d4f1cc4ae33bbfc157ed5d5a5ef3bc29227303d595861deb238fcec4e9457"
+
+[[package]]
+name = "encode_unicode"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a357d28ed41a50f9c765dbfe56cbc04a64e53e5fc58ba79fbc34c10ef3df831f"
 
 [[package]]
 name = "env_logger"
@@ -305,6 +358,15 @@ name = "fs-err"
 version = "2.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5ebd3504ad6116843b8375ad70df74e7bfe83cac77a1f3fe73200c844d43bfe0"
+
+[[package]]
+name = "fxhash"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c31b6d751ae2c7f11320402d34e41349dd1016f8d5d45e48c4312bc8625af50c"
+dependencies = [
+ "byteorder",
+]
 
 [[package]]
 name = "getrandom"
@@ -435,6 +497,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "indicatif"
+version = "0.16.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d207dc617c7a380ab07ff572a6e52fa202a2a8f355860ac9c38e23f8196be1b"
+dependencies = [
+ "console",
+ "lazy_static",
+ "number_prefix",
+ "regex",
+]
+
+[[package]]
 name = "instant"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -545,6 +619,12 @@ dependencies = [
  "hermit-abi",
  "libc",
 ]
+
+[[package]]
+name = "number_prefix"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "830b246a0e5f20af87141b25c173cd1b609bd7779a4617d6ec582abaf90870f3"
 
 [[package]]
 name = "object"
@@ -751,43 +831,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "protobuf"
-version = "2.25.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47c327e191621a2158159df97cdbc2e7074bb4e940275e35abf38eb3d2595754"
-
-[[package]]
-name = "protobuf-codegen"
-version = "2.25.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3df8c98c08bd4d6653c2dbae00bd68c1d1d82a360265a5b0bbc73d48c63cb853"
-dependencies = [
- "protobuf",
-]
-
-[[package]]
-name = "protoc"
-version = "2.25.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ac70cfc8935f5db2a29c0929db697035d02284011a9b78a5ef5d48092ce9673"
-dependencies = [
- "log",
- "which",
-]
-
-[[package]]
-name = "protoc-rust"
-version = "2.25.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6bad71c8404e3e09024fccbab55aae36e3662662167dc4530a242c8cc8ef8d20"
-dependencies = [
- "protobuf",
- "protobuf-codegen",
- "protoc",
- "tempfile",
-]
-
-[[package]]
 name = "quick-error"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -929,17 +972,22 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "color-eyre",
+ "crossbeam",
+ "dashmap",
  "derive_more",
  "fs-err",
+ "fxhash",
  "glob",
  "heed",
+ "indexmap",
+ "indicatif",
  "log",
+ "num_cpus",
+ "once_cell",
  "parking_lot",
  "pretty_env_logger",
  "prost",
  "prost-build",
- "protobuf",
- "protoc-rust",
  "rayon",
  "send_wrapper",
  "serde",
@@ -1065,7 +1113,7 @@ version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d717ed0efc9d39ab3b642a096bc369a3e02a38a51c41845d7fe31bdad1d6eaeb"
 dependencies = [
- "crossbeam-queue",
+ "crossbeam-queue 0.1.2",
 ]
 
 [[package]]
@@ -1089,6 +1137,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2dfed899f0eb03f32ee8c6a0aabdb8a7949659e3466561fc0adf54e26d88c5f4"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "terminal_size"
+version = "0.1.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "633c1a546cee861a1a6d0dc69ebeca693bf4296661ba7852b9d21d159e0506df"
+dependencies = [
+ "libc",
+ "winapi",
 ]
 
 [[package]]
