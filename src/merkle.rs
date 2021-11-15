@@ -409,7 +409,7 @@ impl<'db> MerkleDb<'db> {
                                     }
                                     copied.insert(hash);
                                     let count = written.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            
+
                                     if count % 100000 == 0 && count > 0 {
                                         log::debug!(
                                             "{} state entries written; {} items in queue; {} running",
@@ -418,10 +418,9 @@ impl<'db> MerkleDb<'db> {
                                             running.load(Ordering::Relaxed)
                                         );
                                     }
-            
+
                                     let current = Node::from_bytes(current).unwrap();
                                     rtxn.commit().wrap_err().unwrap();
-                                    // let mut new = 1;
                                     queue.extend(
                                         current
                                             .children
@@ -429,8 +428,6 @@ impl<'db> MerkleDb<'db> {
                                             .into_iter()
                                             .filter(|hash| !copied.contains(hash)),
                                     );
-            
-                                    // bar.inc_length(new);
                                 }
                                 Ok(None) => log::error!("node with hash {:?} not found", hash),
                                 Err(e) => {
@@ -443,46 +440,11 @@ impl<'db> MerkleDb<'db> {
                 });
             }
         }).unwrap();
-        // let mut count = 0;
-        // let added = AtomicU64::new(0);
-        
-        
 
-        log::warn!("Done!");
+        log::debug!("Done copying trees");
 
         Ok(())
     }
-
-    // pub fn copy_to_db(&self, new_env: heed::Env, new_db: &StateDatabase) -> Result<()> {
-    //     let mut queue = VecDeque::new();
-    //     queue.push_back(self.root_hash.clone());
-
-    //     while let Some(current_hash) = queue.pop_front() {
-    //         match self.get(&current_hash) {
-    //             Ok(Some(current)) => {
-    //                 // log::trace!("{} children", current.children.len());
-    //                 {
-    //                     let mut wtxn = new_env.write_txn().wrap_err().unwrap();
-    //                     new_db.put(&mut wtxn, &current_hash, &current).wrap_err().unwrap();
-    //                     wtxn.commit().wrap_err().unwrap();
-    //                 }
-
-    //                 for (_token, hash) in &current.children {
-    //                     queue.push_back(hash.clone());
-    //                 }
-    //             }
-    //             Ok(None) => log::error!("node with hash {:?} not found", current_hash),
-    //             Err(e) => log::error!(
-    //                 "error occurred while fetch node at {:?}: {}",
-    //                 current_hash,
-    //                 e
-    //             ),
-    //         }
-    //         // let current = ?
-    //         // .ok_or_else(|| eyre!("node at {:?} not found", current_hash))?;
-    //     }
-    //     Ok(())
-    // }
 }
 
 pub struct SyncStack {

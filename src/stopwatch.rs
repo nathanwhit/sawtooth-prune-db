@@ -38,10 +38,7 @@ pub struct StopWatch {
 impl StopWatch {
     pub fn start() -> Self {
         let start = Instant::now();
-        Self {
-            last: start.clone(),
-            start,
-        }
+        Self { last: start, start }
     }
 
     pub fn elapsed_total(&mut self) -> Duration {
